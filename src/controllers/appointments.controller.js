@@ -44,7 +44,7 @@ export async function updateAppointment(req, res, next) {
 }
 
 // controller
-export async function cancelAppointment(req, res) {
+export async function cancelAppointment(req, res, next) {
     try {
     const { id } = req.params
     const { cancellation_reason } = req.body
