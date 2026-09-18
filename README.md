@@ -2,7 +2,7 @@
 
 REST API for HealthCare Clinic: doctors, weekly hours, guest booking, and staff appointment management. Node.js, Express, and Supabase (PostgreSQL).
 
-The public site and admin UI live in the sibling app **hc_clinic** (Next.js). That app is a BFF: the browser talks only to Next; Next’s server talks to this API. Do not put Supabase keys in the frontend.
+The public site and admin UI live in the sibling app **[HC-clinic](https://github.com/Moha-Why/HC-clinic)** (Next.js). That app is a BFF: the browser talks only to Next; Next’s server talks to this API. Do not put Supabase keys in the frontend.
 
 ```
 Browser → hc_clinic (Next, :3000) → Clinic-Backend (Express, :4000) → Supabase Postgres
