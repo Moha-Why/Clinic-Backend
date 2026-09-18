@@ -9,7 +9,7 @@ export async function loginUser({ email, password }) {
   const { data: user, error } = await supabase
     .from('users')
     .select('id, email, password_hash, role, full_name, phone, is_active')
-    .eq('email', email)
+    .ilike('email', email)
     .single();
 
   if (error || !user) {

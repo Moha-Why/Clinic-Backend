@@ -1,20 +1,30 @@
-import { Router } from 'express';
+import { Router } from 'express'
 import {
+  cancelAppointment,
+  completeAppointment,
   createAppointment,
   getAllAppointments,
-} from '../controllers/appointments.controller.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.middleware.js';
-import { validateCreateAppointment } from '../validators/appointments.validator.js';
-import { updateAppointment } from '../controllers/appointments.controller.js';
-import { cancelAppointment } from '../controllers/appointments.controller.js';
+  markNoShow,
+} from '../controllers/appointments.controller.js'
+import { requireAdmin, requireAuth } from '../middleware/auth.middleware.js'
+import {
+  validateCancelAppointment,
+  validateCreateAppointment,
+} from '../validators/appointments.validator.js'
 
-const router = Router();
+const router = Router()
 
-router.post('/', validateCreateAppointment, createAppointment);
+router.post('/', validateCreateAppointment, createAppointment)
 
-// admin
-router.get('/', requireAuth, requireAdmin, getAllAppointments);
-router.put('/:id/cancel', requireAuth, requireAdmin, cancelAppointment);
-router.put('/:id', requireAuth, requireAdmin, updateAppointment);
+router.get('/', requireAuth, requireAdmin, getAllAppointments)
+router.put(
+  '/:id/cancel',
+  requireAuth,
+  requireAdmin,
+  validateCancelAppointment,
+  cancelAppointment
+)
+router.put('/:id/complete', requireAuth, requireAdmin, completeAppointment)
+router.put('/:id/no-show', requireAuth, requireAdmin, markNoShow)
 
-export default router;
+export default router

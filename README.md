@@ -50,20 +50,30 @@ npm install
 Create a `.env` file in the project root:
 
 ```env
-PORT=3000
+PORT=4000
 NODE_ENV=development
+CLINIC_TZ=Africa/Cairo
 
 SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
 JWT_SECRET=your_jwt_secret
+
+SEED_ADMIN_EMAIL=admin@clinic.com
+SEED_ADMIN_PASSWORD=choose-a-strong-admin-password
 ```
 
 ### Running the Server
 
 ```bash
-# Development (with hot reload)
+# Development (with hot reload) — listens on PORT, default 4000
 npm run dev
+
+# Seed one admin user and one doctor with Mon–Thu hours
+npm run seed
+
+# Existing databases: run alter_appointments_expired.sql in the Supabase SQL editor
+# to allow status = expired.
 
 # Production
 npm start
@@ -79,6 +89,7 @@ npm start
 |--------|----------|--------|-------------|
 | POST | `/api/auth/login` | Public | Login with email + password |
 | POST | `/api/auth/logout` | Authenticated | Clear auth cookie |
+| GET | `/api/auth/me` | Authenticated | Current user |
 
 **Login request body:**
 ```json
@@ -94,6 +105,7 @@ npm start
   "success": true,
   "message": "Login successful",
   "data": {
+    "token": "jwt",
     "user": {
       "id": "uuid",
       "email": "admin@clinic.com",
@@ -105,7 +117,7 @@ npm start
 }
 ```
 
-> The JWT is set as an `httpOnly` cookie (`accessToken`) and is not included in the response body.
+> The JWT is also set as an `httpOnly` cookie (`accessToken`). The Next.js app reads `data.token` and sets its own cookie; it does not forward Express `Set-Cookie` to the browser.
 
 ---
 
@@ -113,8 +125,9 @@ npm start
 
 | Method | Endpoint | Access | Description |
 |--------|----------|--------|-------------|
-| GET | `/api/doctors` | Public | Get all doctors |
+| GET | `/api/doctors` | Public | Get all doctors (includes weekly hours) |
 | GET | `/api/doctors/:id` | Public | Get doctor by ID |
+| GET | `/api/doctors/:id/slots` | Public | Bookable slots (`from`/`to` as `YYYY-MM-DD`, clinic TZ) |
 | POST | `/api/doctors` | Admin | Create a doctor + weekly availability |
 | PUT | `/api/doctors/:id` | Admin | Update doctor info and/or availability |
 | DELETE | `/api/doctors/:id` | Admin | Delete a doctor |
@@ -128,11 +141,13 @@ npm start
     "phone": "01098765432"
   },
   "availability": [
-    { "day_of_week": 0, "start_time": "09:00", "end_time": "17:00" },
+    { "day_of_week": 1, "start_time": "09:00", "end_time": "17:00" },
     { "day_of_week": 2, "start_time": "09:00", "end_time": "17:00" }
   ]
 }
 ```
+
+> `day_of_week` is ISO-8601: 1 = Monday … 7 = Sunday. Closed days are omitted (no dummy hours). Multiple windows on the same day are allowed.
 
 > When creating a doctor, availability slots are inserted into `doctor_weekly_availability` in the same operation. If availability insertion fails, the doctor row is deleted to keep the database consistent.
 
@@ -145,9 +160,10 @@ npm start
 | Method | Endpoint | Access | Description |
 |--------|----------|--------|-------------|
 | POST | `/api/appointments` | Public | Book an appointment |
-| GET | `/api/appointments` | Admin | Get all appointments |
-| PUT | `/api/appointments/:id` | Admin | Update appointment details |
-| PUT | `/api/appointments/:id/cancel` | Admin | Cancel an appointment |
+| GET | `/api/appointments` | Admin | Get all appointments (expires past `booked` rows first) |
+| PUT | `/api/appointments/:id/cancel` | Admin | Cancel an upcoming booked appointment |
+| PUT | `/api/appointments/:id/complete` | Admin | Mark booked or expired as completed |
+| PUT | `/api/appointments/:id/no-show` | Admin | Mark booked or expired as no-show |
 
 **Book appointment request body:**
 ```json
@@ -159,12 +175,13 @@ npm start
   },
   "appointment": {
     "doctor_id": "uuid",
-    "appointment_date": "2025-08-10",
-    "appointment_time": "10:00",
+    "appointment_start_at": "2026-09-21T07:00:00.000Z",
     "notes": "Follow-up visit"
   }
 }
 ```
+
+> Do not send `appointment_end_at`. The server loads the doctor's duration, sets the end time, and checks weekly hours in `CLINIC_TZ`. Overlap conflicts return **409**.
 
 > Patients are upserted by phone number — if a patient with the same phone already exists, their record is updated rather than creating a duplicate.
 
@@ -175,7 +192,7 @@ npm start
 }
 ```
 
-> Cancellation sets `status = 'cancelled'`, records the `cancellation_reason`, and timestamps `cancelled_at`.
+> Cancellation is only allowed while `status = 'booked'` and `appointment_start_at` is still in the future. Past booked rows are set to `expired` on the next appointments or slots fetch. Staff can then mark `completed` or `no_show`. There is no generic `PUT /:id`.
 
 ---
 

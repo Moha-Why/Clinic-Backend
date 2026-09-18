@@ -1,7 +1,10 @@
-import app from "./app.js";
+import { config } from 'dotenv'
+import app from './app.js'
 
-const PORT = process.env.PORT
+config()
+
+const PORT = Number(process.env.PORT) || 4000
 
 app.listen(PORT, () => {
-    console.log(`Hello from ${PORT}`)
+  console.log(`Clinic API listening on ${PORT}`)
 })
