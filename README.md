@@ -1,53 +1,68 @@
 # Clinic Backend
 
-A RESTful API for managing clinic operations — patients, doctors, appointments, and scheduling. Built with Node.js, Express, and Supabase.
+REST API for HealthCare Clinic: doctors, weekly hours, guest booking, and staff appointment management. Node.js, Express, and Supabase (PostgreSQL).
 
-## Tech Stack
-
-- **Runtime:** Node.js (ESM)
-- **Framework:** Express 5
-- **Database:** Supabase (PostgreSQL)
-- **Auth:** JWT via httpOnly cookies
-- **Password hashing:** bcrypt
-- **Dev tooling:** nodemon
-
-## Architecture
-
-The project follows a layered architecture — each layer has a single responsibility:
+The public site and admin UI live in the sibling app **hc_clinic** (Next.js). That app is a BFF: the browser talks only to Next; Next’s server talks to this API. Do not put Supabase keys in the frontend.
 
 ```
-routes → controllers → services → database
+Browser → hc_clinic (Next, :3000) → Clinic-Backend (Express, :4000) → Supabase Postgres
 ```
+
+## Tech stack
+
+- Node.js 18+ (ESM)
+- Express 5
+- Supabase Postgres (`SUPABASE_SERVICE_ROLE_KEY` only)
+- JWT (`jsonwebtoken`) + bcrypt
+- nodemon in development
 
 ```
 src/
-├── controllers/   # HTTP layer — reads req, calls service, writes res
-├── lib/           # Third-party client setup (Supabase)
-├── middleware/    # Auth guards, error handling
-├── routes/        # URL + method → controller mapping
-├── services/      # Business logic + database queries
-├── utils/         # Pure helpers (JWT signing, ApiError class)
-└── validators/    # Request body validation (runs before controllers)
+├── controllers/   HTTP: read req, call service, write res
+├── lib/           Supabase client
+├── middleware/    Auth guards, error handling
+├── routes/        URL + method → controller
+├── scripts/       seed.js
+├── services/      Business logic + queries
+├── utils/         JWT, clinic timezone, ApiError
+└── validators/    Request body checks
 ```
 
-## Getting Started
+## Database
 
-### Prerequisites
+Apply **`clinic_schema.sql` once** in the Supabase SQL editor on a new project. That file is the full schema (including appointment status `expired`). Do not re-run it on a database that already has these tables.
 
-- Node.js 18+
-- A Supabase project with the clinic schema applied
+| Table | Role |
+|---|---|
+| `users` | Staff accounts (`admin` / `doctor` / `patient`). Login uses this table. |
+| `doctors` | Doctor profile, slot length, `is_active` |
+| `doctor_weekly_availability` | Working windows per ISO weekday |
+| `patients` | Guest identity keyed by **phone** (`user_id` may be null) |
+| `appointments` | Real `timestamptz` start/end, status, notes |
 
-### Installation
+**Weekdays are ISO-8601: 1 = Monday … 7 = Sunday.** Do not use JavaScript `Date#getDay()` (0 = Sunday).
+
+Closed days have **no availability row**. Do not insert dummy hours.
+
+Appointment statuses:
+
+| Status | Meaning |
+|---|---|
+| `booked` | Confirmed upcoming (or in-progress) visit |
+| `expired` | Was `booked` and `appointment_end_at` is in the past (set on the next appointments or slots fetch) |
+| `cancelled` | Staff cancelled while still upcoming |
+| `completed` | Staff marked attended |
+| `no_show` | Staff marked did not attend |
+
+Booked slots cannot overlap for the same doctor (exclusion constraint + unique index on booked start).
+
+## Local setup
 
 ```bash
-git clone https://github.com/Moha-Why/Clinic-Backend.git
-cd Clinic-Backend
 npm install
 ```
 
-### Environment Variables
-
-Create a `.env` file in the project root:
+`.env` (see `.env.example`):
 
 ```env
 PORT=4000
@@ -56,123 +71,68 @@ CLINIC_TZ=Africa/Cairo
 
 SUPABASE_URL=your_supabase_url
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-
 JWT_SECRET=your_jwt_secret
 
 SEED_ADMIN_EMAIL=admin@clinic.com
 SEED_ADMIN_PASSWORD=choose-a-strong-admin-password
 ```
 
-### Running the Server
+| Variable | Used for |
+|---|---|
+| `PORT` | Listen port. Hosts often inject this (e.g. 8080). Default 4000. |
+| `CLINIC_TZ` | IANA zone for expanding weekly hours into dates (not UTC weekdays). |
+| `SUPABASE_*` | Database. Service role only; never an anon key. |
+| `JWT_SECRET` | Signs login tokens. |
+| `SEED_ADMIN_*` | **`npm run seed` only.** Login does not read these. Safe to delete after the first seed. |
 
 ```bash
-# Development (with hot reload) — listens on PORT, default 4000
-npm run dev
-
-# Seed one admin user and one doctor with Mon–Thu hours
-npm run seed
-
-# Existing databases: run alter_appointments_expired.sql in the Supabase SQL editor
-# to allow status = expired.
-
-# Production
-npm start
+npm run seed   # once: admin user + one doctor, Mon–Thu 09:00–17:00
+npm run dev    # nodemon, http://localhost:4000
+npm start      # production
 ```
 
----
+The process binds **`0.0.0.0`** so a reverse proxy (Fly, Railway, Docker) can reach it.
 
-## API Reference
+Pair with hc_clinic: `CLINIC_API_URL=http://localhost:4000` in that app’s `.env.local`, then `npm run dev` there on port 3000.
 
-### Auth
+## HTTP
 
-| Method | Endpoint | Access | Description |
-|--------|----------|--------|-------------|
-| POST | `/api/auth/login` | Public | Login with email + password |
-| POST | `/api/auth/logout` | Authenticated | Clear auth cookie |
-| GET | `/api/auth/me` | Authenticated | Current user |
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/` | Public | `{ "message": "Clinic API" }` |
+| GET | `/health` | Public | `{ "ok": true }` — use this for host health checks |
+| POST | `/api/auth/login` | Public | Email + password. Response includes `data.token`. Also sets an Express cookie (the Next BFF ignores it and sets its own). |
+| POST | `/api/auth/logout` | Auth | |
+| GET | `/api/auth/me` | Auth | Current user, no password hash |
+| GET | `/api/doctors` | Public | All doctors + weekly hours. The Next booking form keeps `is_active` only. |
+| GET | `/api/doctors/:id` | Public | One doctor or 404 |
+| GET | `/api/doctors/:id/slots` | Public | `?from=YYYY-MM-DD&to=YYYY-MM-DD` (max 31 days). Uses `CLINIC_TZ`, duration, skips past and booked. |
+| POST | `/api/doctors` | Admin | Doctor + at least one working-day window |
+| PUT | `/api/doctors/:id` | Admin | Profile and/or replace availability |
+| DELETE | `/api/doctors/:id` | Admin | Fails with 409 if appointments still reference them |
+| POST | `/api/appointments` | Public | Guest book |
+| GET | `/api/appointments` | Admin | Joins patient + doctor; expires stale `booked` rows first |
+| PUT | `/api/appointments/:id/cancel` | Admin | Upcoming `booked` only; body `{ "cancellation_reason": "..." }` |
+| PUT | `/api/appointments/:id/complete` | Admin | From `booked` or `expired` |
+| PUT | `/api/appointments/:id/no-show` | Admin | From `booked` or `expired` |
 
-**Login request body:**
+There is **no** generic `PUT /api/appointments/:id`.
+
+### Login
+
 ```json
-{
-  "email": "admin@clinic.com",
-  "password": "yourpassword"
-}
+{ "email": "admin@clinic.com", "password": "yourpassword" }
 ```
 
-**Login response:**
+`data.token` is the JWT. hc_clinic stores it in a Next httpOnly cookie (`sameSite=lax`) and sends `Cookie: accessToken=...` on admin calls.
+
+Auth middleware verifies the JWT **and reloads the user** so `is_active = false` takes effect before expiry.
+
+### Book
+
 ```json
 {
-  "success": true,
-  "message": "Login successful",
-  "data": {
-    "token": "jwt",
-    "user": {
-      "id": "uuid",
-      "email": "admin@clinic.com",
-      "role": "admin",
-      "fullName": "John Doe",
-      "phone": "01012345678"
-    }
-  }
-}
-```
-
-> The JWT is also set as an `httpOnly` cookie (`accessToken`). The Next.js app reads `data.token` and sets its own cookie; it does not forward Express `Set-Cookie` to the browser.
-
----
-
-### Doctors
-
-| Method | Endpoint | Access | Description |
-|--------|----------|--------|-------------|
-| GET | `/api/doctors` | Public | Get all doctors (includes weekly hours) |
-| GET | `/api/doctors/:id` | Public | Get doctor by ID |
-| GET | `/api/doctors/:id/slots` | Public | Bookable slots (`from`/`to` as `YYYY-MM-DD`, clinic TZ) |
-| POST | `/api/doctors` | Admin | Create a doctor + weekly availability |
-| PUT | `/api/doctors/:id` | Admin | Update doctor info and/or availability |
-| DELETE | `/api/doctors/:id` | Admin | Delete a doctor |
-
-**Create doctor request body:**
-```json
-{
-  "doctor": {
-    "full_name": "Dr. Sarah Ahmed",
-    "specialty": "Cardiology",
-    "phone": "01098765432"
-  },
-  "availability": [
-    { "day_of_week": 1, "start_time": "09:00", "end_time": "17:00" },
-    { "day_of_week": 2, "start_time": "09:00", "end_time": "17:00" }
-  ]
-}
-```
-
-> `day_of_week` is ISO-8601: 1 = Monday … 7 = Sunday. Closed days are omitted (no dummy hours). Multiple windows on the same day are allowed.
-
-> When creating a doctor, availability slots are inserted into `doctor_weekly_availability` in the same operation. If availability insertion fails, the doctor row is deleted to keep the database consistent.
-
-> When updating availability, the old schedule is snapshotted before deletion. If the new insert fails, the old rows are restored.
-
----
-
-### Appointments
-
-| Method | Endpoint | Access | Description |
-|--------|----------|--------|-------------|
-| POST | `/api/appointments` | Public | Book an appointment |
-| GET | `/api/appointments` | Admin | Get all appointments (expires past `booked` rows first) |
-| PUT | `/api/appointments/:id/cancel` | Admin | Cancel an upcoming booked appointment |
-| PUT | `/api/appointments/:id/complete` | Admin | Mark booked or expired as completed |
-| PUT | `/api/appointments/:id/no-show` | Admin | Mark booked or expired as no-show |
-
-**Book appointment request body:**
-```json
-{
-  "patient": {
-    "full_name": "Mohamed Ali",
-    "phone": "01011112222",
-    "date_of_birth": "1990-05-15"
-  },
+  "patient": { "full_name": "Mohamed Ali", "phone": "01011112222" },
   "appointment": {
     "doctor_id": "uuid",
     "appointment_start_at": "2026-09-21T07:00:00.000Z",
@@ -181,84 +141,29 @@ npm start
 }
 ```
 
-> Do not send `appointment_end_at`. The server loads the doctor's duration, sets the end time, and checks weekly hours in `CLINIC_TZ`. Overlap conflicts return **409**.
+Do **not** send `appointment_end_at`. The server adds the doctor’s duration, checks weekly hours in `CLINIC_TZ`, and rejects overlap with **409**. Patients are upserted on phone.
 
-> Patients are upserted by phone number — if a patient with the same phone already exists, their record is updated rather than creating a duplicate.
+## Errors
 
-**Cancel appointment request body:**
-```json
-{
-  "cancellation_reason": "Patient requested reschedule"
-}
-```
+Services throw `ApiError(status, message)`. Unmatched routes are 404. In development the JSON may include a stack trace.
 
-> Cancellation is only allowed while `status = 'booked'` and `appointment_start_at` is still in the future. Past booked rows are set to `expired` on the next appointments or slots fetch. Staff can then mark `completed` or `no_show`. There is no generic `PUT /:id`.
+## Deploy
 
----
+1. Schema already applied on the target Supabase project (`clinic_schema.sql` for a new DB).
+2. Set secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, `CLINIC_TZ`, `NODE_ENV=production`. Do not ship `SEED_ADMIN_*`.
+3. Let the host set `PORT`. The proxy **internal port must equal `PORT`** (this app defaults to 4000 locally; many hosts use 8080 — set `PORT` to match).
+4. Health check **`GET /health`**, not a random port.
+5. Then point hc_clinic’s `CLINIC_API_URL` at this public origin (no trailing slash). No CORS is required for the Next BFF.
 
-## Auth & Authorization
+## Project series
 
-Authentication uses JWT stored in an `httpOnly` cookie, which prevents client-side JavaScript from accessing the token.
+Idea to MVP:
 
-### Flow
-
-1. Client sends credentials to `POST /api/auth/login`
-2. Server validates credentials, signs a JWT (`userId` + `role`), and sets it as a cookie
-3. Subsequent requests automatically include the cookie
-4. `requireAuth` middleware verifies the token and re-fetches the user from the database on every request
-5. `requireAdmin` middleware checks that the user's role is `admin`
-
-### Why re-fetch the user on every request?
-
-Trusting only the JWT payload means a deactivated account could still make requests until the token expires. Re-validating against the database ensures that `is_active = false` takes effect immediately.
-
-### Middleware
-
-```
-requireAuth          → validates cookie token + fetches user from DB
-requireAdmin         → shorthand for requireRole('admin')
-requireRole(...roles) → middleware factory for any role combination
-```
-
----
-
-## Error Handling
-
-All errors flow to a global error handler registered in `app.js`. Services throw `ApiError` instances with an HTTP status code attached:
-
-```js
-throw new ApiError(401, 'Invalid email or password');
-```
-
-The error handler reads `err.statusCode` and responds accordingly. In development mode, the stack trace is included in the response.
-
-Unmatched routes return a `404` with the method and path that was attempted.
-
----
-
-## Database Tables
-
-| Table | Description |
-|-------|-------------|
-| `users` | Admin/staff accounts with role-based access |
-| `patients` | Patient records, upserted by phone |
-| `doctors` | Doctor profiles |
-| `doctor_weekly_availability` | Recurring weekly schedule per doctor |
-| `appointments` | Appointment records linked to patient + doctor |
-
----
-
-## Project Series
-
-This backend is part of an **Idea to MVP** video series:
-
-1. Project Planning
-2. Database Schema Design
-3. **Backend — Architecture & Auth** ← this repo
-4. Backend — Doctors & Appointments
-5. Frontend
-
----
+1. Project planning
+2. Database schema
+3. Backend — architecture and auth
+4. Backend — doctors and appointments
+5. Frontend (hc_clinic)
 
 ## License
 
