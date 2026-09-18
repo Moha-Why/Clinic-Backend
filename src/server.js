@@ -5,6 +5,6 @@ config()
 
 const PORT = Number(process.env.PORT) || 4000
 
-app.listen(PORT, () => {
-  console.log(`Clinic API listening on ${PORT}`)
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Clinic API listening on 0.0.0.0:${PORT}`)
 })

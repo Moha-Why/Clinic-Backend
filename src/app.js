@@ -12,6 +12,17 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 
+app.get('/', (_req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Clinic API',
+  })
+})
+
+app.get('/health', (_req, res) => {
+  res.status(200).json({ ok: true })
+})
+
 // api routes
 app.use('/api/auth', authRoutes);
 app.use('/api/doctors', doctorRoutes);
